@@ -2,81 +2,70 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as pe
 import numpy as np
 import os
 
-# --- CONFIG ---
+# ── CONFIG ──────────────────────────────────────────────────────────────────
 st.set_page_config(layout="wide", page_title="US Infant Mortality | BMED Study")
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap');
-    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-    h1, h2, h3 { font-family: 'DM Serif Display', serif !important; }
-    .main-title {
-        font-family: 'DM Serif Display', serif;
-        font-size: 2.4rem; color: #1a1a2e;
-        text-align: center; margin-bottom: 0.2rem;
-    }
-    .subtitle {
-        font-family: 'DM Sans', sans-serif;
-        font-size: 0.95rem; color: #6b7280;
-        text-align: center; margin-bottom: 2rem;
-        font-weight: 300; letter-spacing: 0.04em; text-transform: uppercase;
-    }
-    .section-label {
-        font-size: 0.75rem; text-transform: uppercase;
-        letter-spacing: 0.1em; color: #9ca3af;
-        font-weight: 500; margin-bottom: 0.3rem;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Source+Sans+3:wght@300;400;600&display=swap');
+
+html, body, [class*="css"] { font-family: 'Source Sans 3', sans-serif; }
+
+.main-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.6rem; color: #0f172a;
+    text-align: center; margin-bottom: 0.15rem; letter-spacing: -0.01em;
+}
+.subtitle {
+    font-size: 0.82rem; color: #94a3b8; text-align: center;
+    margin-bottom: 2.5rem; text-transform: uppercase; letter-spacing: 0.12em;
+}
+.chart-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.35rem; color: #1e293b; margin-bottom: 0.15rem;
+}
+.chart-sub {
+    font-size: 0.75rem; color: #94a3b8; text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 0.8rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# --- DATA LOADING ---
+# ── DATA LOADING ─────────────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
     file_name = "UNdata_Export_20260417_223711907.csv"
     if not os.path.exists(file_name):
-        st.error(f"File `{file_name}` not found. Make sure it's in the same directory as this script.")
+        st.error(f"File `{file_name}` not found.")
         st.stop()
 
     df = pd.read_csv(file_name, low_memory=False)
     df.columns = [str(c).strip() for c in df.columns]
 
-    def find_col(keywords, exclude=None):
-        exclude = exclude or []
-        for col in df.columns:
-            col_l = col.lower()
-            if any(k.lower() in col_l for k in keywords) and not any(e.lower() in col_l for e in exclude):
-                return col
-        return None
+    # Rename based on known UN export format
+    rename = {
+        'Country or Area': 'Country',
+        'Year':            'Year',
+        'Area':            'Area',
+        'Sex':             'Sex',
+        'Value':           'Value',
+    }
+    # Keep only columns we need
+    df = df.rename(columns=rename)
+    keep = [c for c in ['Country','Year','Area','Sex','Value'] if c in df.columns]
+    df = df[keep]
 
-    year_col    = find_col(['year'])
-    sex_col     = find_col(['sex'])
-    area_col    = find_col(['area', 'residence'], exclude=['country'])
-    value_col   = find_col(['value', 'number'])
-    country_col = find_col(['country', 'area'], exclude=['residence'])
-
-    rename_map = {}
-    if year_col:    rename_map[year_col]    = 'Year'
-    if sex_col:     rename_map[sex_col]     = 'Sex'
-    if area_col:    rename_map[area_col]    = 'Area'
-    if value_col:   rename_map[value_col]   = 'Value'
-    if country_col: rename_map[country_col] = 'Country'
-
-    df = df.rename(columns=rename_map)
-
-    if 'Country' in df.columns:
-        df = df[df['Country'].astype(str).str.contains('United States', na=False)]
-
+    df = df[df['Country'].astype(str).str.contains('United States', na=False)]
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     df['Year']  = pd.to_numeric(df['Year'],  errors='coerce')
     df = df.dropna(subset=['Value', 'Year'])
 
-    for col in ['Sex', 'Area']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-
+    df['Sex']    = df['Sex'].astype(str).str.strip()
+    df['Area']   = df['Area'].astype(str).str.strip()
     df['Year']   = df['Year'].astype(int)
     df['Decade'] = (df['Year'] // 10) * 10
 
@@ -84,97 +73,72 @@ def load_data():
 
 df = load_data()
 
-# --- TITLE ---
-st.markdown('<div class="main-title">US Infant Mortality Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">BIOS 4505 / BMED 2400 · Data Source: UN Population Division</div>', unsafe_allow_html=True)
+# ── TITLE ─────────────────────────────────────────────────────────────────────
+st.markdown('<div class="main-title">US Infant Mortality</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">BIOS 4505 / BMED 2400 · UN Population Division</div>', unsafe_allow_html=True)
 
-# --- SIDEBAR ---
-st.sidebar.markdown("## Controls")
-
-all_years   = sorted(df['Year'].unique())
-all_decades = sorted(df['Decade'].unique())
-
-selected_year   = st.sidebar.select_slider("Baby Chart — Year", options=all_years, value=all_years[-1])
-selected_decade = st.sidebar.select_slider("Rose Chart — Decade", options=all_decades, value=all_decades[-1])
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
+st.sidebar.markdown("## 🎛️ Controls")
+all_years = sorted(df['Year'].unique())
+selected_year = st.sidebar.select_slider("Select Year (Baby Chart)", options=all_years, value=all_years[-1])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Color Guide**")
-st.sidebar.markdown("Blue = Male deaths · Pink = Female deaths")
-st.sidebar.markdown("Each pixel = 1% of infant deaths")
+st.sidebar.markdown("**Blue pixels** = % male deaths")
+st.sidebar.markdown("**Pink pixels** = % female deaths")
+st.sidebar.markdown("Each pixel = 1 out of 100 infant deaths")
 
-# DEBUG expander — helps verify numbers match your CSV
-with st.sidebar.expander("Debug: Raw Data"):
-    st.write("**Columns:**", list(df.columns))
-    st.write("**Sex values:**", sorted(df['Sex'].unique()))
-    st.write("**Area values:**", sorted(df['Area'].unique()))
-    yr_sample = df[df['Year'] == selected_year]
-    st.write(f"**Rows for {selected_year}:**", len(yr_sample))
-    st.dataframe(yr_sample[['Year', 'Sex', 'Area', 'Value']].head(20))
+with st.sidebar.expander("🔍 Debug: data check"):
+    yr = df[df['Year'] == selected_year]
+    st.write("Sex values:", sorted(df['Sex'].unique()))
+    st.write("Area values:", sorted(df['Area'].unique()))
+    st.dataframe(yr[['Year','Sex','Area','Value']].head(20))
 
-# ─────────────────────────────────────────────
-# BABY SILHOUETTE — exactly 100 body pixels
-# Verified: this array sums to exactly 100
-# ─────────────────────────────────────────────
+# ── BABY MASK — exactly 100 body pixels ──────────────────────────────────────
 BABY_MASK = np.array([
-    # HEAD
-    [0,0,0,1,1,1,1,0,0,0],   # 4
+    [0,0,0,1,1,1,1,0,0,0],   # 4   HEAD
     [0,0,1,1,1,1,1,1,0,0],   # 6
     [0,0,1,1,1,1,1,1,0,0],   # 6
-    [0,0,0,1,1,1,1,0,0,0],   # 4  → total 20
-    # NECK
-    [0,0,0,0,1,1,0,0,0,0],   # 2  → 22
-    # ARMS / SHOULDERS
-    [0,1,1,1,1,1,1,1,1,0],   # 8
+    [0,0,0,1,1,1,1,0,0,0],   # 4   → 20
+    [0,0,0,0,1,1,0,0,0,0],   # 2   NECK → 22
+    [0,1,1,1,1,1,1,1,1,0],   # 8   SHOULDERS
     [1,1,1,1,1,1,1,1,1,1],   # 10
-    [1,1,1,1,1,1,1,1,1,1],   # 10 → 50
-    # TORSO
+    [1,1,1,1,1,1,1,1,1,1],   # 10  → 50
+    [0,1,1,1,1,1,1,1,1,0],   # 8   TORSO
     [0,1,1,1,1,1,1,1,1,0],   # 8
-    [0,1,1,1,1,1,1,1,1,0],   # 8
-    [0,0,1,1,1,1,1,1,0,0],   # 6  → 72
-    # LEGS
+    [0,0,1,1,1,1,1,1,0,0],   # 6   → 72
+    [0,0,1,1,0,0,1,1,0,0],   # 4   LEGS
     [0,0,1,1,0,0,1,1,0,0],   # 4
     [0,0,1,1,0,0,1,1,0,0],   # 4
     [0,0,1,1,0,0,1,1,0,0],   # 4
-    [0,0,1,1,0,0,1,1,0,0],   # 4
-    [0,0,1,1,0,0,1,1,0,0],   # 4  → 92
-    # FEET
-    [0,1,1,1,0,0,1,1,1,0],   # 6
-    [0,0,1,0,0,0,0,1,0,0],   # 2  → 100
+    [0,0,1,1,0,0,1,1,0,0],   # 4   → 92
+    [0,1,1,1,0,0,1,1,1,0],   # 6   FEET
+    [0,0,1,0,0,0,0,1,0,0],   # 2   → 100
 ])
+TOTAL_BODY = int(BABY_MASK.sum())  # confirmed = 100
 
-TOTAL_BODY = int(BABY_MASK.sum())  # = 100
+# ── LAYOUT: two columns ──────────────────────────────────────────────────────
+col_baby, col_clock = st.columns([1, 1], gap="large")
 
-# ─────────────────────────────────────────────
-# LAYOUT
-# ─────────────────────────────────────────────
-col_left, col_right = st.columns([1, 1], gap="large")
-
-# ══════════════════════════════════════════════
-# LEFT: BABY PIXEL ART
-# ══════════════════════════════════════════════
-with col_left:
-    st.markdown(f"### Baby Pixel Chart — {selected_year}")
-    st.markdown(
-        '<div class="section-label">Each blue pixel = 1% male deaths · Each pink pixel = 1% female deaths</div>',
-        unsafe_allow_html=True
-    )
+# ════════════════════════════════════════════════════════════════════════════
+# LEFT — BABY PIXEL CHART
+# ════════════════════════════════════════════════════════════════════════════
+with col_baby:
+    st.markdown(f'<div class="chart-title">👶 Sex Ratio of Infant Deaths — {selected_year}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="chart-sub">Each pixel = 1% · Blue = Male · Pink = Female</div>', unsafe_allow_html=True)
 
     yr_df = df[df['Year'] == selected_year]
 
     def get_sex_vals(sub):
-        # Male = rows containing 'Male' but NOT 'Female' (avoids double-counting)
         m = sub[
             sub['Sex'].str.contains('Male', case=False, na=False) &
             ~sub['Sex'].str.contains('Female', case=False, na=False)
         ]['Value'].sum()
         f = sub[sub['Sex'].str.contains('Female', case=False, na=False)]['Value'].sum()
-        return m, f
+        return float(m), float(f)
 
-    # Attempt 1: Area contains 'Total'
-    total_area_df = yr_df[yr_df['Area'].str.contains('Total', case=False, na=False)]
-    male_val, female_val = get_sex_vals(total_area_df)
-
-    # Attempt 2: No area filter (sum everything)
+    # Prefer Area == Total rows; fall back to everything
+    total_df = yr_df[yr_df['Area'].str.contains('Total', case=False, na=False)]
+    male_val, female_val = get_sex_vals(total_df)
     if (male_val + female_val) == 0:
         male_val, female_val = get_sex_vals(yr_df)
 
@@ -184,45 +148,45 @@ with col_left:
         male_pct    = male_val / total_val
         male_pixels = round(male_pct * TOTAL_BODY)
 
-        rows, cols = BABY_MASK.shape
-        fig, ax = plt.subplots(figsize=(5, 7.5))
-        fig.patch.set_facecolor('#f8f9ff')
-        ax.set_facecolor('#f8f9ff')
+        ROWS, COLS = BABY_MASK.shape
+        fig, ax = plt.subplots(figsize=(5, 8))
+        fig.patch.set_facecolor('#f8fafc')
+        ax.set_facecolor('#f8fafc')
 
         pixel_idx = 0
-        for r in range(rows):
-            for c in range(cols):
+        for r in range(ROWS):
+            for c in range(COLS):
                 if BABY_MASK[r, c] == 1:
                     color = '#3b82f6' if pixel_idx < male_pixels else '#f472b6'
                     rect = mpatches.FancyBboxPatch(
-                        (c, rows - r - 1), 0.85, 0.85,
-                        boxstyle="round,pad=0.08",
-                        facecolor=color, edgecolor='white', linewidth=1.5
+                        (c, ROWS - r - 1), 0.84, 0.84,
+                        boxstyle="round,pad=0.09",
+                        facecolor=color, edgecolor='white', linewidth=1.8,
+                        zorder=3
                     )
                     ax.add_patch(rect)
                     pixel_idx += 1
                 else:
                     rect = mpatches.FancyBboxPatch(
-                        (c, rows - r - 1), 0.85, 0.85,
-                        boxstyle="round,pad=0.08",
-                        facecolor='#e5e7eb', edgecolor='white',
-                        linewidth=1, alpha=0.3
+                        (c, ROWS - r - 1), 0.84, 0.84,
+                        boxstyle="round,pad=0.09",
+                        facecolor='#cbd5e1', edgecolor='white',
+                        linewidth=1, alpha=0.25, zorder=2
                     )
                     ax.add_patch(rect)
 
-        ax.set_xlim(-0.3, cols + 0.2)
-        ax.set_ylim(-0.5, rows + 0.3)
+        ax.set_xlim(-0.4, COLS + 0.3)
+        ax.set_ylim(-0.6, ROWS + 0.4)
         ax.set_aspect('equal')
         ax.axis('off')
 
-        blue_patch = mpatches.Patch(color='#3b82f6',
-                                    label=f'Male  {male_pct*100:.1f}%  ({int(male_val):,})')
-        pink_patch = mpatches.Patch(color='#f472b6',
-                                    label=f'Female  {(1-male_pct)*100:.1f}%  ({int(female_val):,})')
-        ax.legend(handles=[blue_patch, pink_patch], loc='lower center',
-                  bbox_to_anchor=(0.5, -0.03), ncol=2, fontsize=10, frameon=False)
+        bp = mpatches.Patch(color='#3b82f6', label=f'Male  {male_pct*100:.1f}%  ({int(male_val):,})')
+        pp = mpatches.Patch(color='#f472b6', label=f'Female  {(1-male_pct)*100:.1f}%  ({int(female_val):,})')
+        ax.legend(handles=[bp, pp], loc='lower center',
+                  bbox_to_anchor=(0.5, -0.02), ncol=2, fontsize=10.5,
+                  frameon=False, handlelength=1.2)
 
-        plt.tight_layout()
+        plt.tight_layout(pad=0.5)
         st.pyplot(fig)
         plt.close(fig)
 
@@ -230,115 +194,121 @@ with col_left:
         c1.metric("Male Deaths",   f"{int(male_val):,}")
         c2.metric("Female Deaths", f"{int(female_val):,}")
         c3.metric("Male %",        f"{male_pct*100:.1f}%")
-
     else:
-        st.warning(f"No male/female data found for {selected_year}.")
-        st.write("**Sex values in this year:**", yr_df['Sex'].unique())
-        st.write("**Area values in this year:**", yr_df['Area'].unique())
-        st.dataframe(yr_df[['Sex', 'Area', 'Value']].head(20))
+        st.warning(f"No male/female data for {selected_year}.")
+        st.dataframe(yr_df[['Sex','Area','Value']].head(20))
 
-# ══════════════════════════════════════════════
-# RIGHT: ROSE / POLAR CHART — Urban vs Rural
-# ══════════════════════════════════════════════
-with col_right:
-    st.markdown(f"### Urban vs Rural — {selected_decade}s")
-    st.markdown(
-        '<div class="section-label">Total infant deaths · Both sexes · Highlighted decade = selected in sidebar</div>',
-        unsafe_allow_html=True
-    )
+# ════════════════════════════════════════════════════════════════════════════
+# RIGHT — CLOCK-STYLE ROSE CHART (Urban vs Rural, all decades)
+# ════════════════════════════════════════════════════════════════════════════
+with col_clock:
+    st.markdown('<div class="chart-title">🕐 Urban vs Rural Deaths — All Decades</div>', unsafe_allow_html=True)
+    st.markdown('<div class="chart-sub">Clock layout · Each hour = one decade · Blue = Urban · Grey = Rural · Both Sexes</div>', unsafe_allow_html=True)
 
-    # KEY FIX: .isin() on the Series directly, NOT .str.isin()
-    urban_rural_df = df[df['Area'].isin(['Urban', 'Rural'])]
-
-    # Try to get 'Both sexes' rows; fall back to all rows
-    rose_df = urban_rural_df[
-        urban_rural_df['Sex'].str.contains('Both|Total', case=False, na=False)
-    ]
+    # Get Urban/Rural rows — prefer "Both Sexes", fall back to all
+    ur_df = df[df['Area'].isin(['Urban', 'Rural'])]
+    rose_df = ur_df[ur_df['Sex'].str.contains('Both|Total', case=False, na=False)]
     if rose_df.empty:
-        rose_df = urban_rural_df
+        rose_df = ur_df
 
     if rose_df.empty:
-        st.warning("No Urban/Rural data found in this dataset.")
-        st.write("**Area values available:**", sorted(df['Area'].unique()))
+        st.warning("No Urban/Rural data found.")
+        st.write("Available Area values:", sorted(df['Area'].unique()))
     else:
-        trend_df = (
+        trend = (
             rose_df
             .groupby(['Decade', 'Area'])['Value']
             .sum()
             .reset_index()
         )
 
-        decades_all = sorted(trend_df['Decade'].unique())
-        n = len(decades_all)
+        decades = sorted(trend['Decade'].unique())
+        n = len(decades)
 
-        if n == 0:
-            st.warning("Not enough data to draw rose chart.")
-        else:
-            theta_step = 2 * np.pi / n
-            bar_width  = theta_step * 0.38
+        # ── Clock face setup ──────────────────────────────────────────────
+        # Place decades like clock hours: 12 o'clock = earliest decade,
+        # going clockwise. Each decade gets an angular slot of 2π/n.
+        # Two bars per slot: Urban (blue, inner-left) & Rural (grey, inner-right).
 
-            fig_r, ax_r = plt.subplots(figsize=(6, 6), subplot_kw={'projection': 'polar'})
-            fig_r.patch.set_facecolor('#f8f9ff')
-            ax_r.set_facecolor('#f8f9ff')
+        fig_c, ax_c = plt.subplots(figsize=(7, 7), subplot_kw={'projection': 'polar'})
+        fig_c.patch.set_facecolor('#f8fafc')
+        ax_c.set_facecolor('#f8fafc')
 
-            for i, dec in enumerate(decades_all):
-                theta_center = i * theta_step
-                u = trend_df[
-                    (trend_df['Decade'] == dec) & (trend_df['Area'] == 'Urban')
-                ]['Value'].sum()
-                r = trend_df[
-                    (trend_df['Decade'] == dec) & (trend_df['Area'] == 'Rural')
-                ]['Value'].sum()
+        # Clock: zero at top, clockwise
+        ax_c.set_theta_zero_location('N')
+        ax_c.set_theta_direction(-1)
 
-                highlight = (dec == selected_decade)
-                u_alpha = 1.0 if highlight else 0.40
-                r_alpha = 1.0 if highlight else 0.40
-                u_edge  = '#1d4ed8' if highlight else 'white'
-                r_edge  = '#374151' if highlight else 'white'
+        theta_step = 2 * np.pi / n
+        bar_w      = theta_step * 0.36   # width of each individual bar
 
-                ax_r.bar(theta_center - bar_width / 2, u, width=bar_width,
-                         color='#3b82f6', alpha=u_alpha, edgecolor=u_edge, linewidth=1.5)
-                ax_r.bar(theta_center + bar_width / 2, r, width=bar_width,
-                         color='#9ca3af', alpha=r_alpha, edgecolor=r_edge, linewidth=1.5)
+        u_max = trend[trend['Area'] == 'Urban']['Value'].max()
+        r_max = trend[trend['Area'] == 'Rural']['Value'].max()
+        global_max = max(u_max, r_max) if (u_max > 0 or r_max > 0) else 1
 
-            ax_r.set_xticks([i * theta_step for i in range(n)])
-            ax_r.set_xticklabels([f"'{str(d)[2:]}s" for d in decades_all], fontsize=9)
-            ax_r.set_yticklabels([])
-            ax_r.set_theta_zero_location('N')
-            ax_r.set_theta_direction(-1)
-            ax_r.spines['polar'].set_visible(False)
-            ax_r.grid(color='#e5e7eb', linewidth=0.6)
+        for i, dec in enumerate(decades):
+            theta_center = i * theta_step
 
-            blue_p = mpatches.Patch(color='#3b82f6', label='Urban')
-            grey_p = mpatches.Patch(color='#9ca3af', label='Rural')
-            ax_r.legend(handles=[blue_p, grey_p], loc='lower center',
-                        bbox_to_anchor=(0.5, -0.12), ncol=2, fontsize=11, frameon=False)
+            u = trend[(trend['Decade'] == dec) & (trend['Area'] == 'Urban')]['Value'].sum()
+            r = trend[(trend['Decade'] == dec) & (trend['Area'] == 'Rural')]['Value'].sum()
 
-            plt.tight_layout()
-            st.pyplot(fig_r)
-            plt.close(fig_r)
+            # Urban bar (left of center)
+            ax_c.bar(
+                theta_center - bar_w * 0.55, u,
+                width=bar_w, color='#3b82f6', alpha=0.88,
+                edgecolor='white', linewidth=0.8, bottom=0
+            )
+            # Rural bar (right of center)
+            ax_c.bar(
+                theta_center + bar_w * 0.55, r,
+                width=bar_w, color='#64748b', alpha=0.75,
+                edgecolor='white', linewidth=0.8, bottom=0
+            )
 
-            # Summary callout for selected decade
-            u_val = trend_df[
-                (trend_df['Decade'] == selected_decade) & (trend_df['Area'] == 'Urban')
-            ]['Value'].sum()
-            r_val = trend_df[
-                (trend_df['Decade'] == selected_decade) & (trend_df['Area'] == 'Rural')
-            ]['Value'].sum()
+        # ── Clock-face tick labels (decade = "hour") ──────────────────────
+        tick_angles = [i * theta_step for i in range(n)]
+        ax_c.set_xticks(tick_angles)
+        ax_c.set_xticklabels(
+            [f"'{str(d)[2:]}s" for d in decades],
+            fontsize=8.5, color='#334155', fontweight='600'
+        )
 
-            if u_val > 0 or r_val > 0:
-                c1, c2 = st.columns(2)
-                c1.metric("Urban Deaths", f"{int(u_val):,}")
-                c2.metric("Rural Deaths", f"{int(r_val):,}")
-                gap = r_val - u_val
-                if gap > 0:
-                    st.error(f"Rural Penalty: {int(gap):,} more deaths in rural areas during the {selected_decade}s.")
-                elif gap < 0:
-                    st.info(f"Urban Concentration: {int(abs(gap)):,} more deaths in urban areas during the {selected_decade}s.")
-                else:
-                    st.success("Urban and rural deaths were equal this decade.")
-            else:
-                st.warning(f"No Urban/Rural data for the {selected_decade}s specifically.")
+        # Hide radial gridlines, keep angular lines subtle
+        ax_c.set_yticklabels([])
+        ax_c.yaxis.grid(True, color='#e2e8f0', linewidth=0.6, linestyle='--')
+        ax_c.xaxis.grid(True, color='#e2e8f0', linewidth=0.4)
+        ax_c.spines['polar'].set_color('#e2e8f0')
+        ax_c.spines['polar'].set_linewidth(1)
+
+        # ── Clock centre dot ──────────────────────────────────────────────
+        ax_c.plot(0, 0, 'o', color='#1e293b', markersize=6, zorder=10,
+                  transform=ax_c.transData)
+
+        # ── Legend ────────────────────────────────────────────────────────
+        up = mpatches.Patch(color='#3b82f6', alpha=0.88, label='Urban')
+        rp = mpatches.Patch(color='#64748b', alpha=0.75, label='Rural')
+        ax_c.legend(
+            handles=[up, rp],
+            loc='lower center', bbox_to_anchor=(0.5, -0.12),
+            ncol=2, fontsize=10.5, frameon=False
+        )
+
+        plt.tight_layout(pad=0.5)
+        st.pyplot(fig_c)
+        plt.close(fig_c)
+
+        # ── Data note ─────────────────────────────────────────────────────
+        st.caption(
+            "⚠️ Urban/Rural breakdown only available for select years in this dataset "
+            "(1960–1968 and 2010–2019). Decades with no Urban/Rural data show as empty sectors."
+        )
+
+        # ── Summary table ─────────────────────────────────────────────────
+        with st.expander("📊 View decade totals"):
+            summary = trend.pivot(index='Decade', columns='Area', values='Value').fillna(0).astype(int)
+            summary.index = [f"'{str(d)[2:]}s" for d in summary.index]
+            if 'Urban' in summary.columns and 'Rural' in summary.columns:
+                summary['Rural Penalty'] = summary['Rural'] - summary['Urban']
+            st.dataframe(summary, use_container_width=True)
 
 st.divider()
 st.caption("BIOS 4505 / BMED 2400 · US Infant Mortality · UN Population Division")
