@@ -129,7 +129,3 @@ with col_r:
 
 st.divider()
 st.caption("BIOS 4505 / BMED 2400 | Data Source: UN Population Division")
-        """)
-
-st.divider()
-st.caption("Data Source: UN Population Division | Analysis for BIOS 4505 / BMED 2400")
