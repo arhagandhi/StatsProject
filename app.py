@@ -4,130 +4,128 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-st.set_page_config(layout="wide", page_title="Infant Mortality Study")
+# --- 1. CONFIG & DATA LOADING ---
+st.set_page_config(layout="wide", page_title="US Infant Mortality BMED Study")
 
 @st.cache_data
 def load_data():
     file_name = "UNdata_Export_20260417_223711907.csv"
     if not os.path.exists(file_name):
-        st.error(f"File '{file_name}' not found in GitHub!")
+        st.error(f"File {file_name} not found! Check your GitHub repo.")
         st.stop()
     
-    # Load data and strip any weird spaces from headers
     df = pd.read_csv(file_name, low_memory=False)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # --- THE SMART SCANNER ---
-    # We find the columns by searching for keywords inside the data rows
-    def find_column_by_content(keywords):
+    def find_col(keywords):
         for col in df.columns:
-            sample = df[col].astype(str).str.lower()
-            if any(sample.str.contains(key.lower()).any() for key in keywords):
+            if any(key.lower() in str(col).lower() for key in keywords):
                 return col
         return None
 
-    col_sex = find_column_by_content(['male', 'female', 'both sexes'])
-    col_area = find_column_by_content(['urban', 'rural', 'total'])
-    col_country = find_column_by_content(['united states'])
-    col_year = next((c for c in df.columns if 'year' in c.lower()), None)
-    col_val = next((c for c in df.columns if 'value' in c.lower() or 'number' in c.lower()), df.columns[-1])
-
-    # Rename for internal logic
     df = df.rename(columns={
-        col_sex: 'Sex', col_area: 'Area', 
-        col_year: 'Year', col_val: 'Value', col_country: 'Country'
+        find_col(['Year']): 'Year', 
+        find_col(['Sex']): 'Sex', 
+        find_col(['Area', 'Residence']): 'Area', 
+        find_col(['Value', 'Number']): 'Value', 
+        find_col(['Country', 'Area']): 'Country'
     })
-
-    # Filter for USA and clean numbers
-    df = df[df['Country'].astype(str).str.contains('United States', case=False, na=False)]
+    
+    df = df[df['Country'].astype(str).str.contains('United States', na=False)]
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
     df = df.dropna(subset=['Value', 'Year'])
     
-    # Standardize the text
     df['Sex'] = df['Sex'].astype(str).str.strip()
     df['Area'] = df['Area'].astype(str).str.strip()
-    df['Decade'] = (df['Year'].astype(int) // 10) * 10
+    df['Year'] = df['Year'].astype(int)
+    df['Decade'] = (df['Year'] // 10) * 10
     
     return df
 
-try:
-    df = load_data()
-except Exception as e:
-    st.error(f"Load Error: {e}")
-    st.stop()
+df = load_data()
 
-st.title("👶 US Infant Mortality Analysis")
+# --- 2. SIDEBAR CONTROLS ---
+st.sidebar.header("📊 Interactive Controls")
 
-# --- 1. WAFFLE CHART (Left) ---
-col_w, col_r = st.columns([1, 1.2])
+# Waffle Slider (Single Year)
+all_years = sorted(df['Year'].unique())
+selected_year = st.sidebar.select_slider("1. Waffle Chart Year", options=all_years, value=all_years[-1])
 
+# Rose Slider (Single Decade)
+all_decades = sorted(df['Decade'].unique())
+selected_decade = st.sidebar.select_slider("2. Rose Chart Decade", options=all_decades, value=all_decades[-1])
+
+# --- 3. LAYOUT ---
+col_w, col_r = st.columns(2)
+
+# --- Q1: WAFFLE CHART ---
 with col_w:
-    st.header("Sex Ratio Waffle")
-    years = sorted(df['Year'].unique().astype(int))
-    sel_year = st.select_slider("Select Year", options=years, value=years[-1])
+    st.header(f"Sex Ratio in {selected_year}")
+    w_data = df[(df['Year'] == selected_year) & (df['Area'].str.contains('Total', case=False, na=False))]
+    m = w_data[w_data['Sex'].str.contains('Male', case=False, na=False)]['Value'].sum()
+    f = w_data[w_data['Sex'].str.contains('Female', case=False, na=False)]['Value'].sum()
     
-    # Filter: We need Male/Female for the selected year
-    # We try to find the 'Total' area rows first
-    w_data = df[(df['Year'] == sel_year) & (df['Area'].str.contains('total', case=False, na=False))]
-    
-    # If 'Total' area isn't found, we sum Urban + Rural
-    if w_data.empty:
-        w_data = df[df['Year'] == sel_year]
-
-    m = w_data[w_data['Sex'].str.contains('male', case=False, na=False) & 
-               ~w_data['Sex'].str.contains('both', case=False, na=False)]['Value'].sum()
-    f = w_data[w_data['Sex'].str.contains('female', case=False, na=False)]['Value'].sum()
-
     if (m + f) > 0:
         male_pct = int((m / (m + f)) * 100)
-        fig_w, ax_w = plt.subplots()
+        fig_w, ax_w = plt.subplots(figsize=(6, 6))
         x, y = np.meshgrid(np.arange(10), np.arange(10))
         colors = ['#3498db' if i < male_pct else '#ff69b4' for i in range(100)]
-        ax_w.scatter(x.flatten(), y.flatten(), c=colors, marker='s', s=350, edgecolors='white')
+        ax_w.scatter(x.flatten(), y.flatten(), c=colors, marker='s', s=450, edgecolors='white', linewidth=0.5)
         ax_w.axis('off')
+        ax_w.set_aspect('equal')
         st.pyplot(fig_w)
-        st.write(f"**{sel_year} Ratio:** ♂️ {male_pct}% | ♀️ {100-male_pct}%")
+        st.write(f"**Male: {male_pct}% | Female: {100-male_pct}%**")
     else:
-        st.warning("Could not calculate Sex Ratio for this year.")
+        st.warning("No data for this year.")
 
-# --- 2. THE FULL CLOCK (Right) ---
+# --- Q2: SIDE-BY-SIDE ROSE CHART ---
 with col_r:
-    st.header("70-Year Mortality Clock")
+    st.header(f"Urban vs. Rural Comparison ({selected_decade}s)")
     
-    # Filter for Urban/Rural and 'Both Sexes'
-    r_data = df[df['Area'].str.contains('urban|rural', case=False, na=False) & 
-                df['Sex'].str.contains('both', case=False, na=False)]
+    # Filter for the ONE selected decade
+    rose_df = df[(df['Decade'] == selected_decade) & 
+                 (df['Area'].isin(['Urban', 'Rural'])) & 
+                 (df['Sex'].str.contains('Both', na=False))]
     
-    pivot = r_data.groupby(['Decade', 'Area'])['Value'].sum().unstack().fillna(0)
-    
-    # Identify which columns are Urban vs Rural
-    urban_col = next((c for c in pivot.columns if 'urban' in c.lower()), None)
-    rural_col = next((c for c in pivot.columns if 'rural' in c.lower()), None)
-
-    if urban_col and rural_col:
-        decades = sorted(pivot.index)
-        angles = np.linspace(0, 2 * np.pi, len(decades), endpoint=False)
-        width = (2 * np.pi / len(decades)) * 0.35
-        
-        fig_r, ax_r = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8,8))
-        
-        # Plot Side-by-Side
-        ax_r.bar(angles - width/2, pivot[urban_col], width=width, color='#3498db', label='Urban', edgecolor='black')
-        ax_r.bar(angles + width/2, pivot[rural_col], width=width, color='#bdc3c7', label='Rural', edgecolor='black')
-        
-        ax_r.set_theta_zero_location('N')
-        ax_r.set_theta_direction(-1)
-        ax_r.set_xticks(angles)
-        ax_r.set_xticklabels([f"{int(d)}s" for d in decades], weight='bold')
-        ax_r.set_yticklabels([])
-        ax_r.legend(loc='lower right', bbox_to_anchor=(1.3, 0.1))
-        st.pyplot(fig_r)
+    if rose_df.empty:
+        st.warning(f"No Urban/Rural data found for the {selected_decade}s.")
     else:
-        st.warning("Urban/Rural columns not identified in dataset.")
+        # Get values
+        u_val = rose_df[rose_df['Area'] == 'Urban']['Value'].sum()
+        r_val = rose_df[rose_df['Area'] == 'Rural']['Value'].sum()
+        
+        # Plotting
+        fig_r, ax_r = plt.subplots(figsize=(6, 6), subplot_kw={'projection': 'polar'})
+        
+        # We define two fixed angles for Urban and Rural
+        angles = [np.deg2rad(45), np.deg2rad(135)] 
+        vals = [u_val, r_val]
+        colors = ['#3498db', '#bdc3c7']
+        labels = ['Urban', 'Rural']
+        
+        bars = ax_r.bar(angles, vals, width=0.6, color=colors, edgecolor='black', alpha=0.8)
+        
+        # Formatting
+        ax_r.set_theta_zero_location('N')
+        ax_r.set_xticks(angles)
+        ax_r.set_xticklabels(labels, weight='bold', fontsize=12)
+        ax_r.set_yticklabels([]) # Hide radii
+        
+        # Add labels on top of the bars
+        for bar, val in zip(bars, vals):
+            height = bar.get_height()
+            ax_r.text(bar.get_x() + bar.get_width()/2, height + (height*0.05), 
+                      f'{int(val):,}', ha='center', va='bottom', fontsize=10, weight='bold')
 
-# --- 3. THE EMERGENCY DIAGNOSTIC ---
-with st.expander("DEBUG: See what the code found in your CSV"):
-    st.write("Unique Areas found:", df['Area'].unique())
-    st.write("Unique Sexes found:", df['Sex'].unique())
-    st.dataframe(df.head(20))
+        st.pyplot(fig_r)
+        
+        # Analysis Text
+        gap = r_val - u_val
+        if gap > 0:
+            st.error(f"**Rural Penalty:** There were {int(gap):,} more deaths in Rural areas than Urban areas during this decade.")
+        else:
+            st.success(f"**Urban Gap:** Urban areas recorded {int(abs(gap)):,} more deaths than Rural areas.")
+
+st.divider()
+st.caption("BIOS 4505 / BMED 2400 | Data Source: UN Population Division")
