@@ -11,7 +11,7 @@ st.set_page_config(layout="wide", page_title="US Infant Mortality BMED Study")
 def load_data():
     file_name = "UNdata_Export_20260417_223711907.csv"
     if not os.path.exists(file_name):
-        st.error(f"File {file_name} not found! Check your GitHub repo.")
+        st.error("CSV File not found in GitHub repository!")
         st.stop()
     
     df = pd.read_csv(file_name, low_memory=False)
@@ -33,7 +33,6 @@ def load_data():
     
     df = df[df['Country'].astype(str).str.contains('United States', na=False)]
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
-    df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
     df = df.dropna(subset=['Value', 'Year'])
     
     df['Sex'] = df['Sex'].astype(str).str.strip()
@@ -45,23 +44,18 @@ def load_data():
 
 df = load_data()
 
-# --- 2. SIDEBAR CONTROLS ---
-st.sidebar.header("📊 Interactive Controls")
-
-# Waffle Slider (Single Year)
-all_years = sorted(df['Year'].unique())
-selected_year = st.sidebar.select_slider("1. Waffle Chart Year", options=all_years, value=all_years[-1])
-
-# Rose Slider (Single Decade)
-all_decades = sorted(df['Decade'].unique())
-selected_decade = st.sidebar.select_slider("2. Rose Chart Decade", options=all_decades, value=all_decades[-1])
+# --- 2. HEADER ---
+st.title("📊 US Infant Mortality: The 70-Year Mortality Clock")
 
 # --- 3. LAYOUT ---
-col_w, col_r = st.columns(2)
+col_w, col_r = st.columns([1, 1.2])
 
-# --- Q1: WAFFLE CHART ---
+# --- Q1: WAFFLE (Retains slider for specific year inspection) ---
 with col_w:
-    st.header(f"Sex Ratio in {selected_year}")
+    st.header("Biological Sex Ratio")
+    all_years = sorted(df['Year'].unique())
+    selected_year = st.select_slider("Inspect Year", options=all_years, value=all_years[-1])
+    
     w_data = df[(df['Year'] == selected_year) & (df['Area'].str.contains('Total', case=False, na=False))]
     m = w_data[w_data['Sex'].str.contains('Male', case=False, na=False)]['Value'].sum()
     f = w_data[w_data['Sex'].str.contains('Female', case=False, na=False)]['Value'].sum()
@@ -73,59 +67,51 @@ with col_w:
         colors = ['#3498db' if i < male_pct else '#ff69b4' for i in range(100)]
         ax_w.scatter(x.flatten(), y.flatten(), c=colors, marker='s', s=450, edgecolors='white', linewidth=0.5)
         ax_w.axis('off')
-        ax_w.set_aspect('equal')
         st.pyplot(fig_w)
-        st.write(f"**Male: {male_pct}% | Female: {100-male_pct}%**")
-    else:
-        st.warning("No data for this year.")
+        st.markdown(f"**{selected_year} Ratio:** ♂️ {male_pct}% | ♀️ {100-male_pct}%")
 
-# --- Q2: SIDE-BY-SIDE ROSE CHART ---
+# --- Q2: THE 70-YEAR CLOCK ---
 with col_r:
-    st.header(f"Urban vs. Rural Comparison ({selected_decade}s)")
+    st.header("The Urban-Rural Mortality Clock")
+    st.write("Each wedge is a decade. Blue = Urban, Gray = Rural.")
+
+    # Prepare data for all available decades
+    gap_data = df[df['Area'].isin(['Urban', 'Rural']) & df['Sex'].str.contains('Both', na=False)]
+    pivot = gap_data.groupby(['Decade', 'Area'])['Value'].sum().unstack().fillna(0)
     
-    # Filter for the ONE selected decade
-    rose_df = df[(df['Decade'] == selected_decade) & 
-                 (df['Area'].isin(['Urban', 'Rural'])) & 
-                 (df['Sex'].str.contains('Both', na=False))]
-    
-    if rose_df.empty:
-        st.warning(f"No Urban/Rural data found for the {selected_decade}s.")
+    if pivot.empty:
+        st.warning("No Urban/Rural data found to build the clock.")
     else:
-        # Get values
-        u_val = rose_df[rose_df['Area'] == 'Urban']['Value'].sum()
-        r_val = rose_df[rose_df['Area'] == 'Rural']['Value'].sum()
+        decades = sorted(pivot.index)
+        labels = [f"{int(d)}s" for d in decades]
+        num_decades = len(decades)
         
-        # Plotting
-        fig_r, ax_r = plt.subplots(figsize=(6, 6), subplot_kw={'projection': 'polar'})
+        # Setup angles: one slice per decade
+        angles = np.linspace(0, 2 * np.pi, num_decades, endpoint=False)
+        width = (2 * np.pi / num_decades) * 0.4 # Thinner wedges to fit side-by-side
         
-        # We define two fixed angles for Urban and Rural
-        angles = [np.deg2rad(45), np.deg2rad(135)] 
-        vals = [u_val, r_val]
-        colors = ['#3498db', '#bdc3c7']
-        labels = ['Urban', 'Rural']
+        fig_r, ax_r = plt.subplots(figsize=(8, 8), subplot_kw={'projection': 'polar'})
         
-        bars = ax_r.bar(angles, vals, width=0.6, color=colors, edgecolor='black', alpha=0.8)
+        # Plot Urban and Rural side-by-side within each slice
+        # Shift Urban left and Rural right from the center of the slice
+        ax_r.bar(angles - width/2, pivot['Urban'], width=width, color='#3498db', alpha=0.8, label='Urban', edgecolor='black')
+        ax_r.bar(angles + width/2, pivot['Rural'], width=width, color='#bdc3c7', alpha=0.8, label='Rural', edgecolor='black')
         
-        # Formatting
-        ax_r.set_theta_zero_location('N')
+        # Formatting the Clock
+        ax_r.set_theta_zero_location('N') # 12 o'clock start
+        ax_r.set_theta_direction(-1)     # Clockwise time progression
         ax_r.set_xticks(angles)
         ax_r.set_xticklabels(labels, weight='bold', fontsize=12)
-        ax_r.set_yticklabels([]) # Hide radii
+        ax_r.set_yticklabels([]) # Cleaner look
         
-        # Add labels on top of the bars
-        for bar, val in zip(bars, vals):
-            height = bar.get_height()
-            ax_r.text(bar.get_x() + bar.get_width()/2, height + (height*0.05), 
-                      f'{int(val):,}', ha='center', va='bottom', fontsize=10, weight='bold')
-
+        ax_r.legend(loc='lower right', bbox_to_anchor=(1.3, 0.1))
+        
         st.pyplot(fig_r)
         
-        # Analysis Text
-        gap = r_val - u_val
-        if gap > 0:
-            st.error(f"**Rural Penalty:** There were {int(gap):,} more deaths in Rural areas than Urban areas during this decade.")
-        else:
-            st.success(f"**Urban Gap:** Urban areas recorded {int(abs(gap)):,} more deaths than Rural areas.")
+        st.info("""
+        **How to read the Clock:** As you move clockwise from the 1950s, the total size of the 'petals' shrinks, showing medical progress. 
+        Notice the difference in size between Urban (Blue) and Rural (Gray) bars in each decade.
+        """)
 
 st.divider()
-st.caption("BIOS 4505 / BMED 2400 | Data Source: UN Population Division")
+st.caption("Data Source: UN Population Division | Project Analysis: BMED 2400")
