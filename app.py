@@ -4,114 +4,130 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-# --- 1. CONFIG & DATA LOADING ---
-st.set_page_config(layout="wide", page_title="US Infant Mortality BMED Study")
+st.set_page_config(layout="wide", page_title="Infant Mortality Study")
 
 @st.cache_data
 def load_data():
     file_name = "UNdata_Export_20260417_223711907.csv"
     if not os.path.exists(file_name):
-        st.error("CSV File not found in GitHub repository!")
+        st.error(f"File '{file_name}' not found in GitHub!")
         st.stop()
     
+    # Load data and strip any weird spaces from headers
     df = pd.read_csv(file_name, low_memory=False)
     df.columns = [str(c).strip() for c in df.columns]
 
-    def find_col(keywords):
+    # --- THE SMART SCANNER ---
+    # We find the columns by searching for keywords inside the data rows
+    def find_column_by_content(keywords):
         for col in df.columns:
-            if any(key.lower() in str(col).lower() for key in keywords):
+            sample = df[col].astype(str).str.lower()
+            if any(sample.str.contains(key.lower()).any() for key in keywords):
                 return col
         return None
 
+    col_sex = find_column_by_content(['male', 'female', 'both sexes'])
+    col_area = find_column_by_content(['urban', 'rural', 'total'])
+    col_country = find_column_by_content(['united states'])
+    col_year = next((c for c in df.columns if 'year' in c.lower()), None)
+    col_val = next((c for c in df.columns if 'value' in c.lower() or 'number' in c.lower()), df.columns[-1])
+
+    # Rename for internal logic
     df = df.rename(columns={
-        find_col(['Year']): 'Year', 
-        find_col(['Sex']): 'Sex', 
-        find_col(['Area', 'Residence']): 'Area', 
-        find_col(['Value', 'Number']): 'Value', 
-        find_col(['Country', 'Area']): 'Country'
+        col_sex: 'Sex', col_area: 'Area', 
+        col_year: 'Year', col_val: 'Value', col_country: 'Country'
     })
-    
-    df = df[df['Country'].astype(str).str.contains('United States', na=False)]
+
+    # Filter for USA and clean numbers
+    df = df[df['Country'].astype(str).str.contains('United States', case=False, na=False)]
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
+    df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
     df = df.dropna(subset=['Value', 'Year'])
     
+    # Standardize the text
     df['Sex'] = df['Sex'].astype(str).str.strip()
     df['Area'] = df['Area'].astype(str).str.strip()
-    df['Year'] = df['Year'].astype(int)
-    df['Decade'] = (df['Year'] // 10) * 10
+    df['Decade'] = (df['Year'].astype(int) // 10) * 10
     
     return df
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Load Error: {e}")
+    st.stop()
 
-# --- 2. HEADER ---
-st.title("📊 US Infant Mortality: The 70-Year Mortality Clock")
+st.title("👶 US Infant Mortality Analysis")
 
-# --- 3. LAYOUT ---
+# --- 1. WAFFLE CHART (Left) ---
 col_w, col_r = st.columns([1, 1.2])
 
-# --- Q1: WAFFLE (Retains slider for specific year inspection) ---
 with col_w:
-    st.header("Biological Sex Ratio")
-    all_years = sorted(df['Year'].unique())
-    selected_year = st.select_slider("Inspect Year", options=all_years, value=all_years[-1])
+    st.header("Sex Ratio Waffle")
+    years = sorted(df['Year'].unique().astype(int))
+    sel_year = st.select_slider("Select Year", options=years, value=years[-1])
     
-    w_data = df[(df['Year'] == selected_year) & (df['Area'].str.contains('Total', case=False, na=False))]
-    m = w_data[w_data['Sex'].str.contains('Male', case=False, na=False)]['Value'].sum()
-    f = w_data[w_data['Sex'].str.contains('Female', case=False, na=False)]['Value'].sum()
+    # Filter: We need Male/Female for the selected year
+    # We try to find the 'Total' area rows first
+    w_data = df[(df['Year'] == sel_year) & (df['Area'].str.contains('total', case=False, na=False))]
     
+    # If 'Total' area isn't found, we sum Urban + Rural
+    if w_data.empty:
+        w_data = df[df['Year'] == sel_year]
+
+    m = w_data[w_data['Sex'].str.contains('male', case=False, na=False) & 
+               ~w_data['Sex'].str.contains('both', case=False, na=False)]['Value'].sum()
+    f = w_data[w_data['Sex'].str.contains('female', case=False, na=False)]['Value'].sum()
+
     if (m + f) > 0:
         male_pct = int((m / (m + f)) * 100)
-        fig_w, ax_w = plt.subplots(figsize=(6, 6))
+        fig_w, ax_w = plt.subplots()
         x, y = np.meshgrid(np.arange(10), np.arange(10))
         colors = ['#3498db' if i < male_pct else '#ff69b4' for i in range(100)]
-        ax_w.scatter(x.flatten(), y.flatten(), c=colors, marker='s', s=450, edgecolors='white', linewidth=0.5)
+        ax_w.scatter(x.flatten(), y.flatten(), c=colors, marker='s', s=350, edgecolors='white')
         ax_w.axis('off')
         st.pyplot(fig_w)
-        st.markdown(f"**{selected_year} Ratio:** ♂️ {male_pct}% | ♀️ {100-male_pct}%")
-
-# --- Q2: THE 70-YEAR CLOCK ---
-with col_r:
-    st.header("The Urban-Rural Mortality Clock")
-    st.write("Each wedge is a decade. Blue = Urban, Gray = Rural.")
-
-    # Prepare data for all available decades
-    gap_data = df[df['Area'].isin(['Urban', 'Rural']) & df['Sex'].str.contains('Both', na=False)]
-    pivot = gap_data.groupby(['Decade', 'Area'])['Value'].sum().unstack().fillna(0)
-    
-    if pivot.empty:
-        st.warning("No Urban/Rural data found to build the clock.")
+        st.write(f"**{sel_year} Ratio:** ♂️ {male_pct}% | ♀️ {100-male_pct}%")
     else:
-        decades = sorted(pivot.index)
-        labels = [f"{int(d)}s" for d in decades]
-        num_decades = len(decades)
-        
-        # Setup angles: one slice per decade
-        angles = np.linspace(0, 2 * np.pi, num_decades, endpoint=False)
-        width = (2 * np.pi / num_decades) * 0.4 # Thinner wedges to fit side-by-side
-        
-        fig_r, ax_r = plt.subplots(figsize=(8, 8), subplot_kw={'projection': 'polar'})
-        
-        # Plot Urban and Rural side-by-side within each slice
-        # Shift Urban left and Rural right from the center of the slice
-        ax_r.bar(angles - width/2, pivot['Urban'], width=width, color='#3498db', alpha=0.8, label='Urban', edgecolor='black')
-        ax_r.bar(angles + width/2, pivot['Rural'], width=width, color='#bdc3c7', alpha=0.8, label='Rural', edgecolor='black')
-        
-        # Formatting the Clock
-        ax_r.set_theta_zero_location('N') # 12 o'clock start
-        ax_r.set_theta_direction(-1)     # Clockwise time progression
-        ax_r.set_xticks(angles)
-        ax_r.set_xticklabels(labels, weight='bold', fontsize=12)
-        ax_r.set_yticklabels([]) # Cleaner look
-        
-        ax_r.legend(loc='lower right', bbox_to_anchor=(1.3, 0.1))
-        
-        st.pyplot(fig_r)
-        
-        st.info("""
-        **How to read the Clock:** As you move clockwise from the 1950s, the total size of the 'petals' shrinks, showing medical progress. 
-        Notice the difference in size between Urban (Blue) and Rural (Gray) bars in each decade.
-        """)
+        st.warning("Could not calculate Sex Ratio for this year.")
 
-st.divider()
-st.caption("Data Source: UN Population Division | Project Analysis: BMED 2400")
+# --- 2. THE FULL CLOCK (Right) ---
+with col_r:
+    st.header("70-Year Mortality Clock")
+    
+    # Filter for Urban/Rural and 'Both Sexes'
+    r_data = df[df['Area'].str.contains('urban|rural', case=False, na=False) & 
+                df['Sex'].str.contains('both', case=False, na=False)]
+    
+    pivot = r_data.groupby(['Decade', 'Area'])['Value'].sum().unstack().fillna(0)
+    
+    # Identify which columns are Urban vs Rural
+    urban_col = next((c for c in pivot.columns if 'urban' in c.lower()), None)
+    rural_col = next((c for c in pivot.columns if 'rural' in c.lower()), None)
+
+    if urban_col and rural_col:
+        decades = sorted(pivot.index)
+        angles = np.linspace(0, 2 * np.pi, len(decades), endpoint=False)
+        width = (2 * np.pi / len(decades)) * 0.35
+        
+        fig_r, ax_r = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8,8))
+        
+        # Plot Side-by-Side
+        ax_r.bar(angles - width/2, pivot[urban_col], width=width, color='#3498db', label='Urban', edgecolor='black')
+        ax_r.bar(angles + width/2, pivot[rural_col], width=width, color='#bdc3c7', label='Rural', edgecolor='black')
+        
+        ax_r.set_theta_zero_location('N')
+        ax_r.set_theta_direction(-1)
+        ax_r.set_xticks(angles)
+        ax_r.set_xticklabels([f"{int(d)}s" for d in decades], weight='bold')
+        ax_r.set_yticklabels([])
+        ax_r.legend(loc='lower right', bbox_to_anchor=(1.3, 0.1))
+        st.pyplot(fig_r)
+    else:
+        st.warning("Urban/Rural columns not identified in dataset.")
+
+# --- 3. THE EMERGENCY DIAGNOSTIC ---
+with st.expander("DEBUG: See what the code found in your CSV"):
+    st.write("Unique Areas found:", df['Area'].unique())
+    st.write("Unique Sexes found:", df['Sex'].unique())
+    st.dataframe(df.head(20))
