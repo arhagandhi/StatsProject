@@ -75,7 +75,7 @@ df = load_data()
 
 # ── TITLE ─────────────────────────────────────────────────────────────────────
 st.markdown('<div class="main-title">US Infant Mortality</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">BIOS 4505 / BMED 2400 · UN Population Division</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle"> / BMED 2400 · UN Population Division</div>', unsafe_allow_html=True)
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 st.sidebar.markdown("## 🎛️ Controls")
